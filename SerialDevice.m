@@ -2,6 +2,7 @@ classdef SerialDevice < handle
     properties
         PortObj         % serialport 对象
         DataCallback    % 注入 App 的数据处理回调
+        StatusCallback  % 用于向App传递文本消息的回调函数
         IsRecording = false
     end
     
@@ -20,36 +21,49 @@ classdef SerialDevice < handle
         function StartRecording(obj)
             if ~isempty(obj.PortObj) && isvalid(obj.PortObj)
                 obj.IsRecording = true;
-                writeline(obj.PortObj, "RECORD,1"); 
+                writeline(obj.PortObj, "S"); 
             end
         end
         
         function StopRecording(obj)
             if ~isempty(obj.PortObj) && isvalid(obj.PortObj)
-                writeline(obj.PortObj, "RECORD,0");
+                writeline(obj.PortObj, "E");
                 obj.IsRecording = false;
             end
         end
-        
+
         function readSerialData(obj, ~, ~)
-            if ~obj.IsRecording || isempty(obj.DataCallback)
-                readline(obj.PortObj); % 丢弃非记录状态数据
-                return;
-            end
-            
             try
                 rawStr = readline(obj.PortObj);
-                % 解析格式: Timestamp,Angle,L1..L5,R1..R5 (共12位)
-                dataVector = str2double(split(rawStr, ','));
-                
-                if length(dataVector) == 12 && ~any(isnan(dataVector))
-                    obj.DataCallback(dataVector'); % 转换为行向量推送到 App
+                rawStr = strip(rawStr); % 去除首尾不可见字符（如 \r）
+
+                % 1. 优先识别特定成功字段
+                if strcmpi(rawStr, "All scale tared")
+                    if ~isempty(obj.StatusCallback)
+                        obj.StatusCallback("TareSuccess");
+                    end
+                    return;
                 end
-            catch
-                % 串口误码处理，跳过坏帧
+
+                % 2. 原有的数值数据解析逻辑
+                if obj.IsRecording && ~isempty(obj.DataCallback)
+                    dataVector = str2double(split(rawStr, ','));
+                    if length(dataVector) == 12 && ~any(isnan(dataVector))
+                        obj.DataCallback(dataVector');
+                    end
+                end
+            catch ME
+                fprintf("串口读取错误: %s\n", ME.message);
             end
         end
-        
+
+        function SendCommand(obj, cmdStr)
+            if ~isempty(obj.PortObj) && isvalid(obj.PortObj)
+                writeline(obj.PortObj, cmdStr);
+                disp(['已发送指令: ', char(cmdStr)]); % 在命令行打印调试信息
+            end
+        end
+
         function delete(obj)
             if ~isempty(obj.PortObj) && isvalid(obj.PortObj)
                 obj.StopRecording();
